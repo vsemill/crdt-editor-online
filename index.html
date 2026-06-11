@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Python CRDT Editor</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f9; }
+        textarea { width: 100%; height: 300px; font-size: 18px; padding: 10px; }
+        .header { display: flex; justify-content: space-between; align-items: center; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>Real-Time Editor Engine</h2>
+        <p>User ID: <span id="userId"></span></p>
+    </div>
+    
+    <textarea id="editor" placeholder="Type here..."></textarea>
+
+    <script>
+        // Generate a random User ID for this browser tab
+        const clientId = "User_" + Math.floor(Math.random() * 1000);
+        document.getElementById("userId").innerText = clientId;
+
+        // Connect to the Python FastAPI backend
+        const ws = new WebSocket(`ws://localhost:8000/ws/${clientId}`);
+        const editor = document.getElementById("editor");
+
+        let isSyncing = false; // Prevents infinite loops when server updates client
+
+        // Listen for updates from Python
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === "sync") {
+                isSyncing = true;
+                const cursorPosition = editor.selectionStart;
+                editor.value = data.content; // Update the screen
+                editor.setSelectionRange(cursorPosition, cursorPosition); // Keep cursor in place
+                isSyncing = false;
+            }
+        };
+
+        // Listen for typing on the keyboard
+        editor.addEventListener('input', function(e) {
+            if (isSyncing) return;
+            
+            const cursorPosition = editor.selectionStart;
+            
+            if (e.inputType === "insertText") {
+                // Send an insert command to Python
+                ws.send(JSON.stringify({
+                    type: "insert",
+                    index: cursorPosition - 1,
+                    value: e.data
+                }));
+            } else if (e.inputType === "deleteContentBackward") {
+                // Send a delete command to Python
+                ws.send(JSON.stringify({
+                    type: "delete",
+                    index: cursorPosition
+                }));
+            }
+        });
+    </script>
+</body>
+</html>
