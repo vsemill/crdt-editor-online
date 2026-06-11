@@ -22,7 +22,7 @@
         document.getElementById("userId").innerText = clientId;
 
         // Connect to the Python FastAPI backend
-        const ws = new WebSocket(`ws://localhost:8000/ws/${clientId}`);
+        const ws = new WebSocket(`wss://crdteditoronline.onrender.com/ws/${clientId}`);
         const editor = document.getElementById("editor");
 
         let isSyncing = false; // Prevents infinite loops when server updates client
