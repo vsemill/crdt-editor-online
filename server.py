@@ -56,6 +56,15 @@ class CRDTDocument:
     def delete(self, index: int):
         if 0 <= index < len(self.nodes):
             return self.nodes.pop(index)
+        elif event["type"] == "delete":
+                # Get the length of the highlighted text (default to 1 if not provided)
+                delete_length = event.get("length", 1)
+                
+                # Pop the character at the same index multiple times
+                for _ in range(delete_length):
+                    manager.document.delete(event["index"])
+                    
+                await manager.broadcast_state(client_id)
         return None
 
 # --- 2. The WebSocket Manager ---
