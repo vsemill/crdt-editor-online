@@ -68,19 +68,21 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-        # Send current document state to new user
+        # Tag initial sync as coming from the "server"
         await websocket.send_text(json.dumps({
             "type": "sync", 
-            "content": "".join([n["value"] for n in self.document.nodes])
+            "content": "".join([n["value"] for n in self.document.nodes]),
+            "origin": "server"
         }))
 
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
 
-    async def broadcast_state(self):
-        """Sends the rebuilt text string to all connected clients."""
+    # FIX: Add origin_client_id parameter
+    async def broadcast_state(self, origin_client_id: str):
         full_text = "".join([n["value"] for n in self.document.nodes])
-        message = json.dumps({"type": "sync", "content": full_text})
+        # FIX: Include the origin in the JSON message
+        message = json.dumps({"type": "sync", "content": full_text, "origin": origin_client_id})
         for connection in self.active_connections:
             await connection.send_text(message)
 
@@ -96,11 +98,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             
             if event["type"] == "insert":
                 manager.document.insert(event["index"], event["value"], client_id)
-                await manager.broadcast_state()
+                # FIX: Pass the client_id to the broadcast
+                await manager.broadcast_state(client_id)
                 
             elif event["type"] == "delete":
                 manager.document.delete(event["index"])
-                await manager.broadcast_state()
+                # FIX: Pass the client_id to the broadcast
+                await manager.broadcast_state(client_id)
                 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
