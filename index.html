@@ -20,50 +20,83 @@
         const clientId = "User_" + Math.floor(Math.random() * 1000);
         document.getElementById("userId").innerText = clientId;
 
-        // Make sure to use your actual Render URL here!
+        // Remember to use your actual Render URL here!
         const ws = new WebSocket(`wss://crdteditoronline.onrender.com/ws/${clientId}`); 
         const editor = document.getElementById("editor");
 
-        // --- NEW: Lock the editor until connected ---
         editor.disabled = true;
-        editor.placeholder = "Connecting to server... Please wait (~50 seconds if asleep).";
+        editor.placeholder = "Connecting to server... Please wait.";
 
         ws.onopen = function() {
             editor.disabled = false;
             editor.placeholder = "Type here...";
-            console.log("WebSocket connection established!");
         };
-        // --------------------------------------------
 
+        // --- THE CRDT BRAIN ---
+        let nodes = []; // Local copy of the document array
         let isSyncing = false; 
         let previousText = ""; 
+
+        // Fractional Indexing Math (Moved to Client)
+        function generatePositionBetween(left, right) {
+            let leftStr = left || "0";
+            let rightStr = right || "9";
+            let base = 0;
+            let newPos = "";
+
+            while (base < leftStr.length || base < rightStr.length) {
+                let leftChar = leftStr[base] || "0";
+                let rightChar = rightStr[base] || "9";
+
+                if (leftChar === rightChar) {
+                    newPos += leftChar;
+                    base++;
+                    continue;
+                }
+
+                let leftVal = leftChar.charCodeAt(0);
+                let rightVal = rightChar.charCodeAt(0);
+
+                if (rightVal - leftVal > 1) {
+                    let midVal = Math.floor((leftVal + rightVal) / 2);
+                    newPos += String.fromCharCode(midVal);
+                    return newPos;
+                } else {
+                    newPos += leftChar;
+                    leftStr += "0";
+                    base++;
+                }
+            }
+            return newPos + "5";
+        }
 
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
             if (data.type === "sync") {
-                if (data.origin === clientId) return; 
+                nodes = data.nodes; // Sync our local CRDT with the server's sorted truth
+                const newText = nodes.map(n => n.value).join('');
+
+                if (data.origin === clientId) {
+                    previousText = newText;
+                    return; 
+                }
 
                 isSyncing = true;
                 const isFocused = document.activeElement === editor;
                 const cursorPosition = editor.selectionStart;
                 const oldLength = editor.value.length;
                 
-                // --- THE CURSOR FIX ---
-                // Find exactly where the remote text changed so we don't move 
-                // your cursor if someone else is typing below you.
                 let diffStart = 0;
-                while (diffStart < oldLength && diffStart < data.content.length && previousText[diffStart] === data.content[diffStart]) {
+                while (diffStart < oldLength && diffStart < newText.length && previousText[diffStart] === newText[diffStart]) {
                     diffStart++;
                 }
                 
-                editor.value = data.content; 
-                previousText = data.content; 
+                editor.value = newText; 
+                previousText = newText; 
                 
                 if (isFocused) {
-                    const lengthDiff = data.content.length - oldLength;
+                    const lengthDiff = newText.length - oldLength;
                     let newCursor = cursorPosition;
-                    
-                    // Only push the cursor forward if the remote change happened BEFORE our cursor
                     if (diffStart < cursorPosition) {
                         newCursor += lengthDiff;
                     }
@@ -74,46 +107,52 @@
         };
 
         editor.addEventListener('input', function(e) {
+            if (ws.readyState !== WebSocket.OPEN) return; 
             if (isSyncing) return;
             
             const currentText = editor.value;
 
-            // --- THE INDEX FIX: Prefix/Suffix Diffing ---
-            
-            // 1. Find how many characters match at the START
             let prefixLen = 0;
             while (prefixLen < previousText.length && prefixLen < currentText.length && previousText[prefixLen] === currentText[prefixLen]) {
                 prefixLen++;
             }
             
-            // 2. Find how many characters match at the END
             let suffixLen = 0;
             while (suffixLen < (previousText.length - prefixLen) && suffixLen < (currentText.length - prefixLen) && 
                    previousText[previousText.length - 1 - suffixLen] === currentText[currentText.length - 1 - suffixLen]) {
                 suffixLen++;
             }
             
-            // 3. Calculate what was deleted in the middle
+            // Handle Deletions locally first, then broadcast
             const deletedLen = previousText.length - prefixLen - suffixLen;
-            if (deletedLen > 0) {
+            for (let i = 0; i < deletedLen; i++) {
+                const deletedNode = nodes[prefixLen]; // Always at prefixLen because array shrinks
                 ws.send(JSON.stringify({
                     type: "delete",
-                    index: prefixLen,
-                    length: deletedLen
+                    position: deletedNode.position // Sending specific mathematical position
                 }));
+                nodes.splice(prefixLen, 1); // Shrink local array
             }
             
-            // 4. Calculate what was inserted in the middle
+            // Handle Insertions locally first, then broadcast
             const insertedText = currentText.slice(prefixLen, currentText.length - suffixLen);
             for (let j = 0; j < insertedText.length; j++) {
+                const insertIndex = prefixLen + j;
+                const leftPos = insertIndex > 0 ? nodes[insertIndex - 1].position : null;
+                const rightPos = insertIndex < nodes.length ? nodes[insertIndex].position : null;
+                
+                const newPos = generatePositionBetween(leftPos, rightPos);
+                const newNode = { value: insertedText[j], position: newPos, userId: clientId };
+                
+                nodes.splice(insertIndex, 0, newNode); // Grow local array
+                
                 ws.send(JSON.stringify({
                     type: "insert",
-                    index: prefixLen + j,
-                    value: insertedText[j]
+                    value: newNode.value,
+                    position: newNode.position // Sending specific mathematical position
                 }));
             }
 
-            // Sync the shadow state
             previousText = currentText; 
         });
     </script>
