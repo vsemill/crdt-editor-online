@@ -17,70 +17,93 @@
     <textarea id="editor" placeholder="Type here..."></textarea>
 
     <script>
-        // Generate a random User ID for this browser tab
         const clientId = "User_" + Math.floor(Math.random() * 1000);
         document.getElementById("userId").innerText = clientId;
 
-        // Connect to the Python FastAPI backend
-        const ws = new WebSocket(`wss://crdteditoronline.onrender.com/ws/${clientId}`);
+        // Make sure to use your actual Render URL here!
+        const ws = new WebSocket(`wss://your-url.onrender.com/ws/${clientId}`); 
         const editor = document.getElementById("editor");
 
-        let isSyncing = false; // Prevents infinite loops when server updates client
+        let isSyncing = false; 
+        let previousText = ""; 
 
-        // Listen for updates from Python
-        // Listen for updates from Python
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
             if (data.type === "sync") {
-                
-                // --- THE FIX ---
-                // If we are the ones who caused this update, ignore the echo!
-                // This stops the server from overwriting our fast typing.
-                if (data.origin === clientId) {
-                    return; 
-                }
-                // ---------------
+                if (data.origin === clientId) return; 
 
                 isSyncing = true;
                 const isFocused = document.activeElement === editor;
                 const cursorPosition = editor.selectionStart;
-                
-                // Calculate the difference in length to shift the cursor if someone else typed
                 const oldLength = editor.value.length;
                 
-                editor.value = data.content; 
-                
-                if (isFocused) {
-                    // If someone else added text, push our cursor forward so it doesn't fall behind
-                    const lengthDiff = data.content.length - oldLength;
-                    const newCursor = cursorPosition > 0 ? cursorPosition + lengthDiff : cursorPosition;
-                    editor.setSelectionRange(newCursor, newCursor); 
+                // --- THE CURSOR FIX ---
+                // Find exactly where the remote text changed so we don't move 
+                // your cursor if someone else is typing below you.
+                let diffStart = 0;
+                while (diffStart < oldLength && diffStart < data.content.length && previousText[diffStart] === data.content[diffStart]) {
+                    diffStart++;
                 }
                 
+                editor.value = data.content; 
+                previousText = data.content; 
+                
+                if (isFocused) {
+                    const lengthDiff = data.content.length - oldLength;
+                    let newCursor = cursorPosition;
+                    
+                    // Only push the cursor forward if the remote change happened BEFORE our cursor
+                    if (diffStart < cursorPosition) {
+                        newCursor += lengthDiff;
+                    }
+                    editor.setSelectionRange(newCursor, newCursor); 
+                }
                 isSyncing = false;
             }
         };
 
-        // Listen for typing on the keyboard
         editor.addEventListener('input', function(e) {
             if (isSyncing) return;
             
-            const cursorPosition = editor.selectionStart;
+            const currentText = editor.value;
+
+            // --- THE INDEX FIX: Prefix/Suffix Diffing ---
             
-            if (e.inputType === "insertText") {
-                // Send an insert command to Python
-                ws.send(JSON.stringify({
-                    type: "insert",
-                    index: cursorPosition - 1,
-                    value: e.data
-                }));
-            } else if (e.inputType === "deleteContentBackward") {
-                // Send a delete command to Python
+            // 1. Find how many characters match at the START
+            let prefixLen = 0;
+            while (prefixLen < previousText.length && prefixLen < currentText.length && previousText[prefixLen] === currentText[prefixLen]) {
+                prefixLen++;
+            }
+            
+            // 2. Find how many characters match at the END
+            let suffixLen = 0;
+            while (suffixLen < (previousText.length - prefixLen) && suffixLen < (currentText.length - prefixLen) && 
+                   previousText[previousText.length - 1 - suffixLen] === currentText[currentText.length - 1 - suffixLen]) {
+                suffixLen++;
+            }
+            
+            // 3. Calculate what was deleted in the middle
+            const deletedLen = previousText.length - prefixLen - suffixLen;
+            if (deletedLen > 0) {
                 ws.send(JSON.stringify({
                     type: "delete",
-                    index: cursorPosition
+                    index: prefixLen,
+                    length: deletedLen
                 }));
             }
+            
+            // 4. Calculate what was inserted in the middle
+            const insertedText = currentText.slice(prefixLen, currentText.length - suffixLen);
+            for (let j = 0; j < insertedText.length; j++) {
+                ws.send(JSON.stringify({
+                    type: "insert",
+                    index: prefixLen + j,
+                    value: insertedText[j]
+                }));
+            }
+
+            // Sync the shadow state
+            previousText = currentText; 
         });
     </script>
 </body>
