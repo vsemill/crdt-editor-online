@@ -24,6 +24,17 @@
         const ws = new WebSocket(`wss://crdteditoronline.onrender.com/ws/${clientId}`); 
         const editor = document.getElementById("editor");
 
+        // --- NEW: Lock the editor until connected ---
+        editor.disabled = true;
+        editor.placeholder = "Connecting to server... Please wait (~50 seconds if asleep).";
+
+        ws.onopen = function() {
+            editor.disabled = false;
+            editor.placeholder = "Type here...";
+            console.log("WebSocket connection established!");
+        };
+        // --------------------------------------------
+
         let isSyncing = false; 
         let previousText = ""; 
 
